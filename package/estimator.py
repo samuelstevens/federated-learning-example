@@ -35,19 +35,36 @@ def build_input_fn(features, labels, batch_size=2, finite=False):
     return dataset.make_one_shot_iterator().get_next()
 
 
-def train_input_fn():
-    features = np.array([[1.0, 2, 3, 4, 5, 6, 7, 8, 9, 10]], dtype=np.float32).T
-    labels = np.array(
-        [[0.0, -2, -4, -6, -8, -10, -12, -14, -16, -18]], dtype=np.float32
-    ).T
+def train_data(name):
+    if name == "c1":
+        features = np.array([[1.0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20]], dtype=np.float32).T
+        labels = np.array(
+            [[1.0, -1, -3, -5, -7, -9, -11, -13, -15, -17, -37]], dtype=np.float32
+        ).T
+    elif name == "c2":
+        features = np.array([[1.0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20]], dtype=np.float32).T
+        labels = np.array(
+            [[-1.0, -3, -5, -7, -9, -11, -13, -15, -17, -19, -39]], dtype=np.float32
+        ).T
+    else:
+        raise ValueError(f"{name} is not a valid client name")
 
+    return features, labels
+
+
+def train_input_fn(name):
+    features, labels = train_data(name)
     return build_input_fn(features, labels)
 
 
-def eval_input_fn():
+def eval_data():
     features = np.array([[11.0, 12.0, 13.0, 14.5]], dtype=np.float32).T
     labels = np.array([[-20.0, -22.0, -24, -27]], dtype=np.float32).T
+    return features, labels
 
+
+def eval_input_fn():
+    features, labels = eval_data()
     return build_input_fn(features, labels, 1, finite=True)
 
 
