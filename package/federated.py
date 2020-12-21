@@ -3,7 +3,6 @@
 
 import statistics
 
-import matplotlib.pyplot as plt
 import tensorflow.compat.v1 as tf
 
 from . import estimator, data
@@ -13,29 +12,28 @@ def global_seed(seed):
     tf.random.set_random_seed(seed)
 
 
-def evaluate_model(model, sess):
+def evaluate_model(model, feed_dict, sess):
     mse_values = []
+    print(sess.run(print_params("client")))
     while True:
         try:
-            _, mse = sess.run(model.eval_metric_ops)["mse"]
+            _, mse = sess.run(model.eval_metric_ops, feed_dict=feed_dict)["mse"]
             mse_values.append(mse)
         except tf.errors.OutOfRangeError:
             break
     return statistics.mean(mse_values)
 
 
-def model_fn_with_placeholders():
+def model_fn_with_placeholders(mode):
     features_placeholder = tf.placeholder(
-        tf.float32, shape=[None, 2], name="features_placeholder"
+        tf.float32, shape=[None, 1], name="features_placeholder"
     )
 
     labels_placeholder = tf.placeholder(
         tf.float32, shape=[None, 1], name="labels_placeholder"
     )
 
-    model = estimator.model_fn(
-        features_placeholder, labels_placeholder, tf.estimator.ModeKeys.TRAIN
-    )
+    model = estimator.model_fn(features_placeholder, labels_placeholder, mode)
 
     return model
 
@@ -93,26 +91,19 @@ def print_params(prefix):
 
 
 def main():
-    max_steps = 3
+    # region hyperparams
+
+    max_steps = 10
     num_client_steps = 50
     server_prefix = "server"
     client_prefix = "client"
     sum_prefix = "sum"
-    eval_prefix = "eval"
+
+    # endregion hyperparameters
 
     global_seed(42)
     client_names = ["c1", "c2"]
     num_clients = len(client_names)
-
-    # visualize data
-    """
-    for name in client_names:
-        features, labels = estimator.train_data(name)
-        plt.plot(features, labels)
-    features, labels = estimator.eval_data()
-    plt.plot(features, labels)
-    plt.show()
-    """
 
     # client model weights
     with tf.variable_scope(client_prefix):
@@ -125,23 +116,29 @@ def main():
             iterator = dataset.make_one_shot_iterator()
             client_iters.append(iterator)
 
-        train_handle = tf.placeholder(tf.string, shape=[])  # [] means rank 0 => scalar
+        iter_handle = tf.placeholder(tf.string, shape=[])  # [] means rank 0 => scalar
         train_data_iterator = tf.data.Iterator.from_string_handle(
-            train_handle, dataset.output_types, dataset.output_shapes
+            iter_handle, dataset.output_types, dataset.output_shapes
         )  # dataset refers to last dataset from the for loop above. This can be especially risky because it depends on this code being moved as a single block.
         features, labels = train_data_iterator.get_next()
 
         # endregion training data
 
         client_model = estimator.model_fn(features, labels, tf.estimator.ModeKeys.TRAIN)
+    with tf.variable_scope('eval'):
+        eval_model = estimator.model_fn(features, labels, tf.estimator.ModeKeys.EVAL)
+
+    # region eval data
+    eval_iter = data.make_client_dataset("eval").make_one_shot_iterator()
+    # endregion eval data
 
     # copy of server weights
     with tf.variable_scope(server_prefix):
-        model_fn_with_placeholders()
+        model_fn_with_placeholders(tf.estimator.ModeKeys.TRAIN)
 
     # sum of client weights, before it's converted to an average
     with tf.variable_scope(sum_prefix):
-        model_fn_with_placeholders()
+        model_fn_with_placeholders(tf.estimator.ModeKeys.TRAIN)
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
@@ -151,6 +148,10 @@ def main():
         for iterator in client_iters:
             handle = sess.run(iterator.string_handle())
             client_handles.append(handle)
+
+        eval_handle = sess.run(eval_iter.string_handle())
+
+        # region main training loop
 
         for step in range(max_steps):
             # zero the sum because we are getting new client models
@@ -167,7 +168,9 @@ def main():
                 for client_step in range(num_client_steps):
                     _, loss = sess.run(
                         [client_model.train_op, client_model.loss],
-                        feed_dict={train_handle: client_handle},
+                        feed_dict={
+                            iter_handle: client_handle,
+                        },
                     )
                     print(sess.run(print_params(client_prefix)))
                     print(step, k, name, client_step, loss)
@@ -186,8 +189,15 @@ def main():
             print("server after being assigned mean")
             print(sess.run(print_params(server_prefix)))
 
-        sess.run(copy_params(server_prefix, eval_prefix))
-        print(evaluate_model(eval_model, sess))
+        # endregion
+        sess.run(copy_params(server_prefix, 'eval'))
+        print(
+            evaluate_model(
+                eval_model,
+                {iter_handle: eval_handle},
+                sess,
+            )
+        )
 
 
 if __name__ == "__main__":
