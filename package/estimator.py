@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow.compat.v1 as tf
+from . import data
 
 
 def model_fn(features, labels, mode, params=None, initializer=None):
@@ -25,14 +26,17 @@ def model_fn(features, labels, mode, params=None, initializer=None):
     return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
 
 
-def build_input_fn(features, labels, batch_size=2, finite=False):
-    dataset = tf.data.Dataset.from_tensor_slices((features, labels))
+def build_input_fn(dataset, batch_size=2, finite=False):
+    dataset = tf.data.Dataset.from_tensor_slices(dataset)
+
+    dataset = dataset.map(parse_row)
 
     if not finite:
         dataset = dataset.repeat()
 
     dataset = dataset.shuffle(1000).batch(batch_size)
-    return dataset.make_one_shot_iterator().get_next()
+
+    return dataset
 
 
 def train_data(name):
@@ -41,6 +45,8 @@ def train_data(name):
         labels = np.array(
             [[1.0, -1, -3, -5, -7, -9, -11, -13, -15, -17, -37]], dtype=np.float32
         ).T
+        print(features.shape)
+        print(labels.shape)
     elif name == "c2":
         features = np.array([[1.0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20]], dtype=np.float32).T
         labels = np.array(
@@ -52,20 +58,15 @@ def train_data(name):
     return features, labels
 
 
-def train_input_fn(name):
-    features, labels = train_data(name)
-    return build_input_fn(features, labels)
+def train_input_fn():
+    datasets = data.all_datasets()
+    return build_input_fn(datasets)
 
 
 def eval_data():
     features = np.array([[11.0, 12.0, 13.0, 14.5]], dtype=np.float32).T
     labels = np.array([[-20.0, -22.0, -24, -27]], dtype=np.float32).T
     return features, labels
-
-
-def eval_input_fn():
-    features, labels = eval_data()
-    return build_input_fn(features, labels, 1, finite=True)
 
 
 def main():

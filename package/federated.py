@@ -1,9 +1,12 @@
 """Uses the estimator model_fn from estimator.py and uses it in a federated algorithm. The idea is to model the correct line by averaging the different clients' models. To simulate some difference, each client will have a different bias, and then if you average all the clients, you'll get the right line."""
+
+
 import statistics
 
+import matplotlib.pyplot as plt
 import tensorflow.compat.v1 as tf
 
-from . import estimator
+from . import estimator, data
 
 
 def global_seed(seed):
@@ -23,10 +26,11 @@ def evaluate_model(model, sess):
 
 def model_fn_with_placeholders():
     features_placeholder = tf.placeholder(
-        tf.float32, shape=[None, 1], name="features_placeholder"
+        tf.float32, shape=[None, 2], name="features_placeholder"
     )
+
     labels_placeholder = tf.placeholder(
-        tf.float32, shape=[None, 1], name="labels_placeholer"
+        tf.float32, shape=[None, 1], name="labels_placeholder"
     )
 
     model = estimator.model_fn(
@@ -89,44 +93,69 @@ def print_params(prefix):
 
 
 def main():
-    max_steps = 1
-    num_clients = 1
-    num_client_steps = 20
+    max_steps = 3
+    num_client_steps = 50
     server_prefix = "server"
     client_prefix = "client"
     sum_prefix = "sum"
     eval_prefix = "eval"
 
     global_seed(42)
+    client_names = ["c1", "c2"]
+    num_clients = len(client_names)
+
+    # visualize data
+    """
+    for name in client_names:
+        features, labels = estimator.train_data(name)
+        plt.plot(features, labels)
+    features, labels = estimator.eval_data()
+    plt.plot(features, labels)
+    plt.show()
+    """
+
+    # client model weights
+    with tf.variable_scope(client_prefix):
+        # region training data
+
+        # client iterators
+        client_iters = []
+        for name in client_names:
+            dataset = data.make_client_dataset(name)
+            iterator = dataset.make_one_shot_iterator()
+            client_iters.append(iterator)
+
+        train_handle = tf.placeholder(tf.string, shape=[])  # [] means rank 0 => scalar
+        train_data_iterator = tf.data.Iterator.from_string_handle(
+            train_handle, dataset.output_types, dataset.output_shapes
+        )  # dataset refers to last dataset from the for loop above. This can be especially risky because it depends on this code being moved as a single block.
+        features, labels = train_data_iterator.get_next()
+
+        # endregion training data
+
+        client_model = estimator.model_fn(features, labels, tf.estimator.ModeKeys.TRAIN)
+
+    # copy of server weights
+    with tf.variable_scope(server_prefix):
+        model_fn_with_placeholders()
+
+    # sum of client weights, before it's converted to an average
+    with tf.variable_scope(sum_prefix):
+        model_fn_with_placeholders()
 
     with tf.Session() as sess:
-        with tf.variable_scope(server_prefix):
-            server_model = model_fn_with_placeholders()
-
-        with tf.variable_scope(sum_prefix):
-            sum_model = model_fn_with_placeholders()
-            # must be initialized to zero.
-
-        with tf.variable_scope(client_prefix, reuse=tf.AUTO_REUSE):
-            # somehow this needs to return different results based on a passed filename during sess.run
-            client_features, client_labels = estimator.train_input_fn()
-            client_model = estimator.model_fn(
-                client_features, client_labels, tf.estimator.ModeKeys.TRAIN
-            )
-
-        with tf.variable_scope(eval_prefix):
-            eval_features, eval_labels = estimator.eval_input_fn()
-            eval_model = estimator.model_fn(
-                eval_features, eval_labels, tf.estimator.ModeKeys.EVAL
-            )
-
         sess.run(tf.global_variables_initializer())
         sess.run(tf.local_variables_initializer())
+
+        client_handles = []
+        for iterator in client_iters:
+            handle = sess.run(iterator.string_handle())
+            client_handles.append(handle)
 
         for step in range(max_steps):
             # zero the sum because we are getting new client models
             sess.run(zero(sum_prefix))
-            for k in range(num_clients):
+            for k, client_handle in zip(range(num_clients), client_handles):
                 # copy wt to the client
                 print("server before copying to client")
                 print(sess.run(print_params(server_prefix)))
@@ -138,8 +167,10 @@ def main():
                 for client_step in range(num_client_steps):
                     _, loss = sess.run(
                         [client_model.train_op, client_model.loss],
+                        feed_dict={train_handle: client_handle},
                     )
-                    print(step, k, client_step, loss)
+                    print(sess.run(print_params(client_prefix)))
+                    print(step, k, name, client_step, loss)
 
                 # add wk*'s weights to sum(wk*)
                 print("sum before getting client")

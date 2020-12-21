@@ -4,3 +4,5 @@ events.out.*
 *.swp
 
 .python-version
+
+.ipynb_checkpoints/
